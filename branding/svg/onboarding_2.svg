@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="640" viewBox="0 0 800 640"><defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0" stop-color="#1F7A5E"/><stop offset="1" stop-color="#08362A"/>
+</linearGradient>
+<pattern id="geo" width="64" height="64" patternUnits="userSpaceOnUse">
+  <polygon points="32.00,10.00 38.44,16.44 47.56,16.44 47.56,25.56 54.00,32.00 47.56,38.44 47.56,47.56 38.44,47.56 32.00,54.00 25.56,47.56 16.44,47.56 16.44,38.44 10.00,32.00 16.44,25.56 16.44,16.44 25.56,16.44" fill="none" stroke="#C9A24B" stroke-opacity="0.10" stroke-width="1.5"/>
+</pattern>
+</defs>
+<circle cx="400" cy="320" r="270" fill="#0E4D3C" fill-opacity="0.07"/>
+<rect x="170" y="90" width="460" height="470" rx="22" fill="#fff" stroke="#0E4D3C" stroke-opacity="0.15" stroke-width="3"/>
+<circle cx="572" cy="175" r="34" fill="#0E4D3C" fill-opacity="0.9"/>
+<rect x="320" y="152" width="210" height="16" rx="8" fill="#16211D" fill-opacity="0.75"/>
+<rect x="390" y="182" width="140" height="12" rx="6" fill="#16211D" fill-opacity="0.3"/>
+<rect x="206" y="154" width="84" height="42" rx="21" fill="#C9A24B" fill-opacity="1"/>
+<text x="248" y="184" text-anchor="middle" font-family="Tajawal" font-weight="700" font-size="26" fill="#fff">+60</text><circle cx="572" cy="315" r="34" fill="#C9A24B" fill-opacity="0.9"/>
+<rect x="320" y="292" width="210" height="16" rx="8" fill="#16211D" fill-opacity="0.75"/>
+<rect x="390" y="322" width="140" height="12" rx="6" fill="#16211D" fill-opacity="0.3"/>
+<rect x="206" y="294" width="84" height="42" rx="21" fill="#C9A24B" fill-opacity="0.35"/>
+<text x="248" y="324" text-anchor="middle" font-family="Tajawal" font-weight="700" font-size="26" fill="#16211D">+40</text><circle cx="572" cy="455" r="34" fill="#1F7A5E" fill-opacity="0.9"/>
+<rect x="320" y="432" width="210" height="16" rx="8" fill="#16211D" fill-opacity="0.75"/>
+<rect x="390" y="462" width="140" height="12" rx="6" fill="#16211D" fill-opacity="0.3"/>
+<rect x="206" y="434" width="84" height="42" rx="21" fill="#C9A24B" fill-opacity="0.35"/>
+<text x="248" y="464" text-anchor="middle" font-family="Tajawal" font-weight="700" font-size="26" fill="#16211D">+25</text>
+<g transform="translate(600 430)"><circle r="70" fill="#C9A24B"/><path d="M-30 2 L-8 26 L34 -22" stroke="#fff" stroke-width="16" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g></svg>

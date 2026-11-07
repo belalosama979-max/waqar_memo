@@ -1,0 +1,248 @@
+rules_version = '2';
+
+// Security model for "الوقار".
+// Roles and department live in Firebase Auth custom claims, set ONLY by Cloud
+// Functions (Admin SDK):  { role: 'admin' | 'teacher', dept: 'male' | 'female', mcp: bool }
+//   mcp = "must change password" — a teacher with a temporary password can sign in
+//         and read their own profile, but cannot touch any academic data.
+// Department isolation is enforced here, never by client-side filtering.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function isAdmin() { return signedIn() && request.auth.token.role == 'admin'; }
+    function isTeacher() {
+      return signedIn()
+        && request.auth.token.role == 'teacher'
+        && request.auth.token.dept in ['male', 'female']
+        && request.auth.token.get('mcp', false) == false;
+    }
+    function dept() { return request.auth.token.dept; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function docPath(col, id) { return /databases/$(database)/documents/$(col)/$(id); }
+    function validDept(d) { return d in ['male', 'female']; }
+    function validName(n) { return n is string && n.size() >= 2 && n.size() <= 60; }
+    function optionalString(m, k, max) { return !(k in m) || m[k] == null || (m[k] is string && m[k].size() <= max); }
+
+    function evaluationNames() { return ['excellentPlus', 'excellent', 'veryGood', 'notRecited', 'repeat']; }
+    function defaultPoints() {
+      return { 'excellentPlus': 60, 'excellent': 40, 'veryGood': 25, 'notRecited': 0, 'repeat': 10 };
+    }
+
+    // ---------- users (private profile) ----------
+    match /users/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      // A user may only manage their own push registration ids, and signal a
+      // password change (verified server-side by onPasswordChangeRequested).
+      allow update: if signedIn() && request.auth.uid == uid
+        && changedKeys().hasOnly(['fcmTokens', 'passwordChangeRequestedAt'])
+        && (!('fcmTokens' in changedKeys())
+            || (incoming().fcmTokens is list && incoming().fcmTokens.size() <= 10))
+        && (!('passwordChangeRequestedAt' in changedKeys())
+            || incoming().passwordChangeRequestedAt == request.time);
+      allow create, delete: if false; // Cloud Functions only
+    }
+
+    // ---------- public login directory (names only) ----------
+    match /login_directory/{id} {
+      allow read: if true;
+      allow write: if false; // Cloud Functions only
+    }
+
+    match /departments/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ---------- teachers ----------
+    match /teachers/{tid} {
+      allow read: if isAdmin() || (isTeacher() && resource.data.departmentId == dept());
+      // Admin client only maintains the student counter; everything else via Functions.
+      allow update: if isAdmin()
+        && changedKeys().hasOnly(['studentCount'])
+        && incoming().studentCount is int && incoming().studentCount >= 0;
+      allow create, delete: if false;
+    }
+
+    // ---------- students ----------
+    function studentKeys() {
+      return ['fullName', 'searchName', 'teacherId', 'teacherName', 'departmentId', 'totalPoints',
+              'recitationCount', 'guardianPhone', 'notes', 'joinedAt', 'createdAt', 'updatedAt',
+              'lastRecitationId', 'lastRecitationLabel', 'lastRecitationDate', 'lastEvaluation',
+              'lastAppliedRecitationId', 'previousTeacherIds', 'transferredAt'];
+    }
+
+    function teacherMatches(data) {
+      let t = getAfter(docPath('teachers', data.teacherId));
+      return t != null && t.data.departmentId == data.departmentId && t.data.active == true;
+    }
+
+    function validStudentCreate() {
+      let s = incoming();
+      return s.keys().hasOnly(studentKeys())
+        && s.keys().hasAll(['fullName', 'teacherId', 'teacherName', 'departmentId', 'totalPoints', 'recitationCount'])
+        && validName(s.fullName)
+        && validDept(s.departmentId)
+        && s.totalPoints == 0 && s.recitationCount == 0
+        && optionalString(s, 'guardianPhone', 30)
+        && optionalString(s, 'notes', 300)
+        && teacherMatches(s);
+    }
+
+    function validStudentAdminUpdate() {
+      let s = incoming();
+      return s.keys().hasOnly(studentKeys())
+        && validName(s.fullName)
+        && validDept(s.departmentId)
+        && s.totalPoints is int && s.recitationCount is int && s.recitationCount >= 0
+        && optionalString(s, 'guardianPhone', 30)
+        && optionalString(s, 'notes', 300)
+        && (!('teacherId' in changedKeys()) || teacherMatches(s));
+    }
+
+    // A teacher may only change a student's aggregate in the SAME batch that
+    // creates a new recitation for that student, by exactly that recitation's points.
+    function teacherAppliesRecitation(sid) {
+      let rid = incoming().lastAppliedRecitationId;
+      let after = getAfter(docPath('recitations', rid));
+      return existing().teacherId == request.auth.uid
+        && existing().departmentId == dept()
+        && changedKeys().hasOnly(['totalPoints', 'recitationCount', 'lastAppliedRecitationId', 'updatedAt',
+                                  'lastRecitationId', 'lastRecitationLabel', 'lastRecitationDate', 'lastEvaluation'])
+        && rid is string
+        && !exists(docPath('recitations', rid))
+        && after != null
+        && after.data.studentId == sid
+        && incoming().totalPoints == existing().totalPoints + after.data.totalPoints
+        && incoming().recitationCount == existing().recitationCount + 1
+        && incoming().updatedAt == request.time
+        && (!('lastRecitationId' in changedKeys()) || incoming().lastRecitationId == rid)
+        && (!('lastEvaluation' in changedKeys()) || incoming().lastEvaluation == after.data.evaluation)
+        && (!('lastRecitationDate' in changedKeys()) || incoming().lastRecitationDate == after.data.recitationDate)
+        && (!('lastRecitationLabel' in changedKeys()) || (incoming().lastRecitationLabel is string && incoming().lastRecitationLabel.size() <= 60));
+    }
+
+    match /students/{sid} {
+      allow read: if isAdmin() || (isTeacher() && resource.data.departmentId == dept());
+      allow create: if isAdmin() && validStudentCreate();
+      allow update: if (isAdmin() && validStudentAdminUpdate())
+                    || (isTeacher() && teacherAppliesRecitation(sid));
+      allow delete: if isAdmin();
+    }
+
+    // ---------- recitations (append-only history) ----------
+    function recitationKeys() {
+      return ['studentId', 'studentName', 'teacherId', 'teacherName', 'departmentId', 'recitationDate',
+              'recitationType', 'partNumber', 'surahNumber', 'evaluation', 'evaluationPoints',
+              'extraPoints', 'totalPoints', 'createdBy', 'createdAt'];
+    }
+
+    function expectedPoints(evaluation) {
+      let settings = get(docPath('evaluation_settings', 'default'));
+      return settings != null && ('points' in settings.data) && (evaluation in settings.data.points)
+        ? settings.data.points[evaluation]
+        : defaultPoints()[evaluation];
+    }
+
+    function maxExtra() {
+      let settings = get(docPath('evaluation_settings', 'default'));
+      return settings != null && ('maxExtraPoints' in settings.data) ? settings.data.maxExtraPoints : 100;
+    }
+
+    function validPortion(r) {
+      return (r.recitationType == 'juz'
+                && r.partNumber is int && r.partNumber >= 1 && r.partNumber <= 30
+                && r.get('surahNumber', null) == null)
+          || (r.recitationType == 'surah'
+                && r.surahNumber is int && r.surahNumber >= 1 && r.surahNumber <= 114
+                && r.get('partNumber', null) == null);
+    }
+
+    function validRecitation(rid) {
+      let r = incoming();
+      let student = getAfter(docPath('students', r.studentId));
+      return r.keys().hasOnly(recitationKeys())
+        && r.keys().hasAll(['studentId', 'studentName', 'teacherId', 'teacherName', 'departmentId',
+                            'recitationDate', 'recitationType', 'evaluation', 'evaluationPoints',
+                            'extraPoints', 'totalPoints', 'createdBy', 'createdAt'])
+        && r.teacherId == request.auth.uid
+        && r.createdBy == request.auth.uid
+        && r.departmentId == dept()
+        && student != null
+        && student.data.teacherId == request.auth.uid
+        && student.data.departmentId == dept()
+        && student.data.lastAppliedRecitationId == rid
+        && r.studentName is string && r.studentName.size() <= 60
+        && r.teacherName is string && r.teacherName.size() <= 60
+        && validPortion(r)
+        && r.evaluation in evaluationNames()
+        && r.evaluationPoints is int && r.evaluationPoints == expectedPoints(r.evaluation)
+        && r.extraPoints is int && r.extraPoints >= 0 && r.extraPoints <= maxExtra()
+        && r.totalPoints == r.evaluationPoints + r.extraPoints
+        && r.recitationDate is timestamp
+        && r.recitationDate <= request.time + duration.value(1, 'd')
+        && r.recitationDate >= request.time - duration.value(400, 'd')
+        && r.createdAt == request.time;
+    }
+
+    match /recitations/{rid} {
+      allow read: if isAdmin() || (isTeacher() && resource.data.departmentId == dept());
+      allow create: if isTeacher() && validRecitation(rid);
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- settings ----------
+    function validEvaluationSettings() {
+      let s = incoming();
+      let p = s.points;
+      return s.keys().hasOnly(['points', 'maxExtraPoints', 'updatedAt'])
+        && p is map && p.keys().hasOnly(evaluationNames()) && p.keys().hasAll(evaluationNames())
+        && p.excellentPlus is int && p.excellentPlus >= 0 && p.excellentPlus <= 1000
+        && p.excellent is int && p.excellent >= 0 && p.excellent <= 1000
+        && p.veryGood is int && p.veryGood >= 0 && p.veryGood <= 1000
+        && p.notRecited is int && p.notRecited >= 0 && p.notRecited <= 1000
+        && p.repeat is int && p.repeat >= 0 && p.repeat <= 1000
+        && s.maxExtraPoints is int && s.maxExtraPoints >= 0 && s.maxExtraPoints <= 1000;
+    }
+
+    match /evaluation_settings/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin() && id == 'default' && validEvaluationSettings();
+    }
+
+    match /app_settings/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        && incoming().keys().hasOnly(['academyName', 'milestoneStep', 'updatedAt'])
+        && validName(incoming().academyName)
+        && incoming().milestoneStep is int && incoming().milestoneStep >= 50;
+    }
+
+    // ---------- notifications ----------
+    match /notifications/{nid} {
+      allow read: if isAdmin()
+        || (isTeacher() && (resource.data.audience == 'all'
+                            || resource.data.audience == 'dept_' + dept()
+                            || resource.data.get('userId', '') == request.auth.uid));
+      allow create: if isAdmin()
+        && incoming().keys().hasOnly(['title', 'body', 'audience', 'type', 'createdBy', 'createdAt'])
+        && incoming().audience in ['all', 'dept_male', 'dept_female']
+        && incoming().type == 'announcement'
+        && incoming().title is string && incoming().title.size() > 0 && incoming().title.size() <= 80
+        && incoming().body is string && incoming().body.size() > 0 && incoming().body.size() <= 500
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow delete: if isAdmin();
+      allow update: if false;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

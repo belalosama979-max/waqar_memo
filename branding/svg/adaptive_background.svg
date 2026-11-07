@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0" stop-color="#1F7A5E"/><stop offset="1" stop-color="#08362A"/>
+</linearGradient>
+<pattern id="geo" width="64" height="64" patternUnits="userSpaceOnUse">
+  <polygon points="32.00,10.00 38.44,16.44 47.56,16.44 47.56,25.56 54.00,32.00 47.56,38.44 47.56,47.56 38.44,47.56 32.00,54.00 25.56,47.56 16.44,47.56 16.44,38.44 10.00,32.00 16.44,25.56 16.44,16.44 25.56,16.44" fill="none" stroke="#C9A24B" stroke-opacity="0.10" stroke-width="1.5"/>
+</pattern>
+</defs><rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#geo)"/></svg>
