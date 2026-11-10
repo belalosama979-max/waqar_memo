@@ -1,30 +1,28 @@
-import 'dart:async';
-
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../core/firebase/firebase_config.dart';
 import '../../../core/firebase/firebase_providers.dart';
-import '../../auth/domain/app_user.dart';
+import 'notifications_repository.dart';
 
 final localNotificationsProvider = Provider<FlutterLocalNotificationsPlugin>(
   (ref) => FlutterLocalNotificationsPlugin(),
 );
 
 final pushServiceProvider = Provider<PushService>(
-  (ref) => PushService(ref.watch(messagingProvider), ref.watch(firestoreProvider), ref.watch(localNotificationsProvider)),
+  (ref) => PushService(ref.watch(localNotificationsProvider), ref.watch(sharedPreferencesProvider)),
 );
 
-/// Firebase Cloud Messaging + local notifications (Arabic channel).
+/// Device alerts on the Firebase free plan (no server to send push messages).
+///
+/// In-app notifications live in Firestore; while the app is running, new ones
+/// (announcements, milestones) are also shown as a phone notification.
 class PushService {
-  PushService(this._fcm, this._db, this._local);
+  PushService(this._local, this._prefs);
 
-  final FirebaseMessaging _fcm;
-  final FirebaseFirestore _db;
   final FlutterLocalNotificationsPlugin _local;
+  final SharedPreferences _prefs;
 
   static const channel = AndroidNotificationChannel(
     'alwaqar_general',
@@ -34,10 +32,6 @@ class PushService {
   );
 
   bool _initialized = false;
-  StreamSubscription<RemoteMessage>? _foregroundSub;
-  StreamSubscription<String>? _tokenSub;
-  final _subscribedTopics = <String>{};
-  String? _registrationId;
 
   Future<void> initLocal() async {
     if (_initialized) return;
@@ -45,16 +39,26 @@ class PushService {
     await _local.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('ic_notification'),
-        iOS: DarwinInitializationSettings(
-          requestAlertPermission: false,
-          requestBadgePermission: false,
-          requestSoundPermission: false,
-        ),
+        iOS: DarwinInitializationSettings(),
       ),
     );
-    await _local
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    final android = _local.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await android?.createNotificationChannel(channel);
+  }
+
+  /// Asks for notification permission once a user is signed in.
+  Future<void> registerUser() async {
+    try {
+      await initLocal();
+      await _local
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+      await _local
+          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+    } catch (e) {
+      debugPrint('Notification permission request failed: $e');
+    }
   }
 
   Future<void> showLocal({required String title, required String body}) async {
@@ -77,68 +81,22 @@ class PushService {
     );
   }
 
-  List<String> _topicsFor(AppUser user) => [
-        'all',
-        if (user.isAdmin) 'admins',
-        if (user.isTeacher && user.departmentId != null) 'dept_${user.departmentId!.id}',
-      ];
+  static String _seenKey(String userId) => 'notifications.lastSeen.$userId';
 
-  /// Requests permission, registers the device token and subscribes to topics.
-  Future<void> registerUser(AppUser user) async {
-    if (FirebaseConfig.useEmulator) return; // FCM is not emulated.
-    try {
-      await initLocal();
-      final settings = await _fcm.requestPermission(alert: true, badge: true, sound: true);
-      if (settings.authorizationStatus == AuthorizationStatus.denied) return;
-      await _fcm.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
-
-      await _tokenSub?.cancel();
-      _tokenSub = _fcm.onRegistered.listen((id) {
-        _registrationId = id;
-        _saveToken(user.id, id);
-      });
-      await _fcm.register();
-
-      for (final topic in _topicsFor(user)) {
-        await _fcm.subscribeToTopic(topic);
-        _subscribedTopics.add(topic);
-      }
-
-      await _foregroundSub?.cancel();
-      _foregroundSub = FirebaseMessaging.onMessage.listen((m) {
-        final n = m.notification;
-        if (n != null && defaultTargetPlatform == TargetPlatform.android) {
-          showLocal(title: n.title ?? 'الوقار', body: n.body ?? '');
-        }
-      });
-    } catch (e) {
-      debugPrint('Push registration failed: $e');
-    }
-  }
-
-  Future<void> _saveToken(String uid, String token) => _db.collection(Col.users).doc(uid).update({
-        'fcmTokens': FieldValue.arrayUnion([token]),
-      });
-
-  /// Called before sign-out so the device stops receiving this user's pushes.
-  Future<void> unregister(String uid) async {
-    if (FirebaseConfig.useEmulator) return;
-    try {
-      await _foregroundSub?.cancel();
-      await _tokenSub?.cancel();
-      for (final t in _subscribedTopics) {
-        await _fcm.unsubscribeFromTopic(t);
-      }
-      _subscribedTopics.clear();
-      final id = _registrationId;
-      if (id != null) {
-        await _db.collection(Col.users).doc(uid).update({
-          'fcmTokens': FieldValue.arrayRemove([id]),
-        });
-      }
-      _registrationId = null;
-    } catch (e) {
-      debugPrint('Push unregister failed: $e');
+  /// Shows a phone alert for notifications newer than the last one seen on
+  /// this device. The first load only records the baseline (no alert burst).
+  Future<void> alertNew(String userId, List<AppNotification> list) async {
+    final key = _seenKey(userId);
+    final dated = list.where((n) => n.createdAt != null).toList();
+    if (dated.isEmpty) return;
+    final newest = dated.map((n) => n.createdAt!).reduce((a, b) => a.isAfter(b) ? a : b);
+    final lastSeenMs = _prefs.getInt(key);
+    await _prefs.setInt(key, newest.millisecondsSinceEpoch);
+    if (lastSeenMs == null) return;
+    final lastSeen = DateTime.fromMillisecondsSinceEpoch(lastSeenMs);
+    final fresh = dated.where((n) => n.createdAt!.isAfter(lastSeen)).take(3);
+    for (final n in fresh) {
+      await showLocal(title: n.title, body: n.body);
     }
   }
 }

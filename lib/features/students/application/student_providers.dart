@@ -11,7 +11,7 @@ import '../domain/student.dart';
 final myStudentsProvider = StreamProvider<List<Student>>((ref) {
   final user = ref.watch(currentUserProvider).value;
   if (user == null || user.departmentId == null) return Stream.value(const []);
-  return ref.watch(studentRepositoryProvider).watchTeacherStudents(teacherId: user.id, department: user.departmentId!);
+  return ref.watch(studentRepositoryProvider).watchTeacherStudents(teacherId: user.teacherKey, department: user.departmentId!);
 });
 
 final studentProvider = StreamProvider.family<Student?, String>(

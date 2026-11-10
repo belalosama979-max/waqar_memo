@@ -97,7 +97,7 @@ class _StudentProfileScreenState extends ConsumerState<StudentProfileScreen> {
           if (student == null) return const EmptyState(icon: Icons.person_off_rounded, title: 'الطالب غير موجود');
           final historyAsync = ref.watch(studentHistoryProvider((studentId: student.id, department: student.departmentId, limit: _limit)));
           final history = historyAsync.value ?? const <Recitation>[];
-          final canRecord = user != null && user.isTeacher && user.id == student.teacherId;
+          final canRecord = user != null && user.isTeacher && user.teacherKey == student.teacherId;
           return CustomScrollView(
             slivers: [
               SliverToBoxAdapter(child: _Header(student: student)),

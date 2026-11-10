@@ -19,14 +19,13 @@ An Arabic-only Flutter app for managing Quran recitation circles, backed by Fire
 - **الملف الشخصي للطالب** مع رسوم بيانية لتقدم النقاط وتوزيع التقييمات.
 - **لوحة الإدارة:** إدارة المعلمين (إضافة، تعديل، حذف، إيقاف، إعادة تعيين الدخول)، إدارة الطلاب (إضافة، تعديل، نقل، حذف)، سجل التسميع، تعديل قيم النقاط، الإعلانات، والإحصاءات اليومية/الأسبوعية/الشهرية وأفضل الطلاب والمعلمين.
 - **العمل دون اتصال:** ذاكرة محلية، طابور للتسميعات غير المرسلة، ومزامنة تلقائية مع شريط حالة عربي.
-- **الإشعارات** عبر Firebase Cloud Messaging (إعلانات، وتنبيهات إنجاز الطلاب).
+- **الإشعارات** داخل التطبيق (إعلانات الإدارة، وتنبيهات إنجاز الطلاب)، مع تنبيه على الجوال أثناء فتح التطبيق.
 - **التصدير:** تقارير PDF عربية للطالب ولوحات الصدارة، وملفات Excel، والمشاركة والطباعة.
 
 ## التقنيات
 
 Flutter · Riverpod 3 · GoRouter · Freezed/json_serializable · Firebase Auth · Cloud
-Firestore (offline persistence) · Cloud Functions · Cloud Messaging · App Check ·
-Storage · fl_chart · pdf/printing · excel · flutter_secure_storage · shared_preferences.
+Firestore (offline persistence) · App Check · local notifications · fl_chart · pdf/printing · excel · flutter_secure_storage · shared_preferences.
 
 ## البدء السريع
 
@@ -54,7 +53,7 @@ cd .. && flutter run --dart-define-from-file=env/emulator.json
 
 لا توجد أي مفاتيح أو بيانات اعتماد في المستودع: إعدادات Firebase تُمرَّر وقت البناء من
 `env/firebase.json` (مستبعد من git)، ومفاتيح التوقيع في `android/key.properties`
-(مستبعد). جميع عمليات الصلاحيات تتم عبر Cloud Functions وقواعد Firestore.
+(مستبعد). يعمل التطبيق على **خطة Firebase المجانية (Spark)** دون خادم: كل الصلاحيات مفروضة بقواعد Firestore.
 
 ## الترخيص
 

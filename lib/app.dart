@@ -6,9 +6,20 @@ import 'core/services/connectivity_service.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/application/session_providers.dart';
 import 'features/auth/data/auth_repository.dart';
+import 'features/notifications/data/notifications_repository.dart';
 import 'features/notifications/data/push_service.dart';
 import 'features/recitations/data/recitation_repository.dart';
 import 'router/app_router.dart';
+
+/// Raises a phone alert for new notifications while the app is running.
+final _notificationAlertsProvider = Provider<void>((ref) {
+  final user = ref.watch(currentUserProvider).value;
+  if (user == null || !user.active || user.mustChangePassword) return;
+  ref.listen(notificationsProvider(user), (_, next) {
+    final list = next.value;
+    if (list != null) ref.read(pushServiceProvider).alertNew(user.id, list);
+  });
+});
 
 class AlwaqarApp extends ConsumerWidget {
   const AlwaqarApp({super.key});
@@ -16,6 +27,7 @@ class AlwaqarApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    ref.watch(_notificationAlertsProvider);
 
     // Session side effects: push registration and offline-queue reconciliation.
     ref.listen(currentUserProvider, (prev, next) {
@@ -27,7 +39,7 @@ class AlwaqarApp extends ConsumerWidget {
         return;
       }
       if (user != null && before?.id != user.id) {
-        ref.read(pushServiceProvider).registerUser(user);
+        ref.read(pushServiceProvider).registerUser();
         ref.read(recitationRepositoryProvider).reconcilePending();
       }
     });

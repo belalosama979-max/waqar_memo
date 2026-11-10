@@ -285,8 +285,133 @@ class _AdminLoginFormState extends ConsumerState<_AdminLoginForm> {
             onPressed: _busy ? null : _submit,
             child: _busy ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4)) : const Text('دخول الإدارة'),
           ),
+          // One-time setup, shown only until the first admin account exists.
+          if (ref.watch(_adminBootstrappedProvider).value == false) ...[
+            const SizedBox(height: 18),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text(
+              'لم يتم إعداد حساب الإدارة بعد. أنشئ الحساب الأول للمشرف العام (مرة واحدة فقط).',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('first_admin_open'),
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                showDragHandle: true,
+                builder: (_) => const _FirstAdminSheet(),
+              ),
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              label: const Text('إعداد حساب الإدارة لأول مرة'),
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+final _adminBootstrappedProvider = StreamProvider<bool>(
+  (ref) => ref.watch(authRepositoryProvider).watchAdminBootstrapped(),
+);
+
+class _FirstAdminSheet extends ConsumerStatefulWidget {
+  const _FirstAdminSheet();
+
+  @override
+  ConsumerState<_FirstAdminSheet> createState() => _FirstAdminSheetState();
+}
+
+class _FirstAdminSheetState extends ConsumerState<_FirstAdminSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    for (final c in [_name, _email, _password, _confirm]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(authRepositoryProvider).createFirstAdmin(
+            displayName: _name.text,
+            email: _email.text,
+            password: _password.text,
+          );
+      if (mounted) Navigator.pop(context);
+      // The router moves to the admin dashboard once the profile loads.
+    } on AppFailure catch (e) {
+      if (mounted) showAppSnack(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: SafeArea(
+          child: Form(
+            key: _formKey,
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              children: [
+                Text('إنشاء حساب المشرف العام', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _name,
+                  validator: Validators.personName,
+                  decoration: const InputDecoration(labelText: 'الاسم', prefixIcon: Icon(Icons.person_rounded)),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  textDirection: TextDirection.ltr,
+                  validator: Validators.email,
+                  decoration: const InputDecoration(labelText: 'البريد الإلكتروني', prefixIcon: Icon(Icons.alternate_email_rounded)),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _password,
+                  obscureText: true,
+                  validator: Validators.newPassword,
+                  decoration: const InputDecoration(
+                    labelText: 'كلمة المرور',
+                    helperText: '٨ أحرف على الأقل وتتضمن حروفاً وأرقاماً',
+                    prefixIcon: Icon(Icons.lock_rounded),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _confirm,
+                  obscureText: true,
+                  validator: (v) => Validators.confirmPassword(v, _password.text),
+                  decoration: const InputDecoration(labelText: 'تأكيد كلمة المرور', prefixIcon: Icon(Icons.lock_outline_rounded)),
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: _busy ? null : _submit,
+                  child: _busy
+                      ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4))
+                      : const Text('إنشاء الحساب'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
 }

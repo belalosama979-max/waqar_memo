@@ -13,13 +13,17 @@ require('firebase/compat/firestore');
 const { FieldValue, Timestamp } = firebase.firestore;
 let env;
 
-const ADMIN = { uid: 'admin1', claims: { role: 'admin' } };
-const T_MALE = { uid: 'tm1', claims: { role: 'teacher', dept: 'male' } };
-const T_MALE2 = { uid: 'tm2', claims: { role: 'teacher', dept: 'male' } };
-const T_FEMALE = { uid: 'tf1', claims: { role: 'teacher', dept: 'female' } };
-const T_MCP = { uid: 'tm3', claims: { role: 'teacher', dept: 'male', mcp: true } };
+// Roles come from users/{authUid} profile documents (no custom claims).
+// Login uid and teacher id differ on purpose: a teacher's identity is
+// teachers/{tid}; users/{uid}.teacherId links a login to it.
+const ADMIN = { uid: 'admin1' };
+const T_MALE = { uid: 'u_tm1', tid: 'tm1', dep: 'male' };
+const T_MALE2 = { uid: 'u_tm2', tid: 'tm2', dep: 'male' };
+const T_FEMALE = { uid: 'u_tf1', tid: 'tf1', dep: 'female' };
+const T_MCP = { uid: 'u_tm3', tid: 'tm3', dep: 'male' };
+const RETIRED = { uid: 'u_tm1_old', tid: 'tm1', dep: 'male' };
 
-const db = (who) => (who ? env.authenticatedContext(who.uid, who.claims) : env.unauthenticatedContext()).firestore();
+const db = (who) => (who ? env.authenticatedContext(who.uid) : env.unauthenticatedContext()).firestore();
 
 before(async () => {
   const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080').split(':');
@@ -39,7 +43,17 @@ beforeEach(async () => {
     await teacher('tm1', 'محمد', 'male');
     await teacher('tm2', 'أحمد', 'male');
     await teacher('tf1', 'فاطمة', 'female');
-    await f.doc('users/tm1').set({ role: 'teacher', displayName: 'محمد', departmentId: 'male', active: true, mustChangePassword: true });
+    await teacher('tm3', 'سالم', 'male');
+    await f.doc('users/admin1').set({ role: 'admin', displayName: 'المشرف', departmentId: null, active: true, mustChangePassword: false });
+    const login = (who, name, extra = {}) => f.doc(`users/${who.uid}`).set({
+      role: 'teacher', displayName: name, departmentId: who.dep, teacherId: who.tid, active: true, mustChangePassword: false, ...extra,
+    });
+    await login(T_MALE, 'محمد');
+    await login(T_MALE2, 'أحمد');
+    await login(T_FEMALE, 'فاطمة');
+    await login(T_MCP, 'سالم', { mustChangePassword: true });
+    await login(RETIRED, 'محمد', { active: false });
+    await f.doc('app_settings/bootstrap').set({ adminUid: 'admin1', createdAt: Timestamp.now() });
     await f.doc('login_directory/tm1').set({ displayName: 'محمد', departmentId: 'male', authEmail: 'x@y.z', active: true });
     const student = (id, teacherId, dep) => f.doc(`students/${id}`).set({
       fullName: `طالب ${id}`, searchName: id, teacherId, teacherName: 'x', departmentId: dep, totalPoints: 100, recitationCount: 2,
@@ -62,7 +76,7 @@ function recitationBatch(f, { rid = 'new1', studentId = 'sm1', teacher = T_MALE,
   const b = f.batch();
   const t = total === undefined ? evalPts + extra : total;
   b.set(f.doc(`recitations/${rid}`), {
-    studentId, studentName: 'طالب', teacherId: teacher.uid, teacherName: 'محمد', departmentId: dep,
+    studentId, studentName: 'طالب', teacherId: teacher.tid, teacherName: 'محمد', departmentId: dep,
     recitationDate: Timestamp.now(), recitationType: type,
     partNumber: type === 'juz' ? num : null, surahNumber: type === 'surah' ? num : null,
     evaluation, evaluationPoints: evalPts, extraPoints: extra, totalPoints: t,
@@ -118,7 +132,7 @@ describe('department isolation', () => {
     const f = db(null);
     await assertSucceeds(f.collection('login_directory').where('departmentId', '==', 'male').get());
     await assertFails(f.collection('students').where('departmentId', '==', 'male').get());
-    await assertFails(f.doc('users/tm1').get());
+    await assertFails(f.doc(`users/${T_MALE.uid}`).get());
   });
 });
 
@@ -191,7 +205,7 @@ describe('recitation registration', () => {
 
   test('teacher with a temporary password cannot write academic data', async () => {
     await env.withSecurityRulesDisabled(async (ctx) => ctx.firestore().doc('students/sm3').set({
-      fullName: 'x', teacherId: 'tm3', teacherName: 'x', departmentId: 'male', totalPoints: 0, recitationCount: 0,
+      fullName: 'x', teacherId: 'tm3', teacherName: 'x', departmentId: 'male', totalPoints: 0, recitationCount: 0, lastAppliedRecitationId: null,
     }));
     await assertFails(recitationBatch(db(T_MCP), { studentId: 'sm3', teacher: T_MCP }).commit());
     await assertFails(db(T_MCP).collection('students').where('departmentId', '==', 'male').get());
@@ -222,15 +236,66 @@ describe('administration', () => {
     await assertFails(f.doc('students/sm1').update({ teacherId: 'tf1', teacherName: 'فاطمة', departmentId: 'male' }));
   });
 
-  test('teachers cannot create teacher accounts or change roles', async () => {
-    await assertFails(db(T_MALE).doc('teachers/x').set({ displayName: 'x', departmentId: 'male' }));
-    await assertFails(db(T_MALE).doc('users/tm1').update({ role: 'admin' }));
-    await assertFails(db(T_MALE).doc('users/tm1').update({ departmentId: 'female' }));
-    await assertFails(db(T_MALE).doc('users/tm1').update({ mustChangePassword: false }));
-    await assertSucceeds(db(T_MALE).doc('users/tm1').update({ fcmTokens: ['abc'] }));
-    await assertSucceeds(db(T_MALE).doc('users/tm1').update({ passwordChangeRequestedAt: FieldValue.serverTimestamp() }));
-    await assertFails(db(T_MALE).doc('users/tm1').update({ passwordChangeRequestedAt: Timestamp.fromDate(new Date(2020, 1, 1)) }));
-    await assertFails(db(T_FEMALE).doc('users/tm1').update({ passwordChangeRequestedAt: FieldValue.serverTimestamp() }));
+  test('profiles: teachers cannot change roles, departments or others; can finish first-login', async () => {
+    const me = db(T_MALE).doc(`users/${T_MALE.uid}`);
+    await assertFails(db(T_MALE).doc('teachers/x').set({ displayName: 'xx', departmentId: 'male', active: true, studentCount: 0 }));
+    await assertFails(me.update({ role: 'admin' }));
+    await assertFails(me.update({ departmentId: 'female' }));
+    await assertFails(me.update({ teacherId: 'tm2' }));
+    await assertFails(me.update({ active: true, mustChangePassword: true }));
+    await assertSucceeds(me.update({ fcmTokens: ['abc'] }));
+    await assertFails(db(T_FEMALE).doc(`users/${T_MALE.uid}`).update({ fcmTokens: ['x'] }));
+    await assertFails(db(T_FEMALE).doc(`users/${T_MALE.uid}`).get());
+    // First-login: a teacher may only clear their own flag (true -> false).
+    const mcp = db(T_MCP).doc(`users/${T_MCP.uid}`);
+    await assertSucceeds(mcp.update({ mustChangePassword: false, passwordChangedAt: FieldValue.serverTimestamp() }));
+    await assertFails(mcp.update({ passwordChangedAt: Timestamp.fromDate(new Date(2020, 1, 1)) }));
+  });
+
+  test('retired / deactivated logins can do nothing', async () => {
+    const f = db(RETIRED);
+    await assertSucceeds(f.doc(`users/${RETIRED.uid}`).get());
+    await assertFails(f.collection('students').where('departmentId', '==', 'male').get());
+    await assertFails(recitationBatch(f, { teacher: RETIRED }).commit());
+  });
+
+  test('admin creates a teacher (identity + directory + login) atomically', async () => {
+    const f = db(ADMIN);
+    const b = f.batch();
+    b.set(f.doc('teachers/tnew'), { displayName: 'خالد', departmentId: 'male', active: true, studentCount: 0, phone: null, authUid: 'u_new', createdAt: FieldValue.serverTimestamp() });
+    b.set(f.doc('login_directory/tnew'), { displayName: 'خالد', departmentId: 'male', authEmail: 't.1@teachers.alwaqar.app', active: true });
+    b.set(f.doc('users/u_new'), { role: 'teacher', displayName: 'خالد', departmentId: 'male', teacherId: 'tnew', active: true, mustChangePassword: true, email: 't.1@teachers.alwaqar.app', createdAt: FieldValue.serverTimestamp() });
+    await assertSucceeds(b.commit());
+    // Must start with a temporary password, and match the teacher's department.
+    await assertFails(f.doc('users/u_x').set({ role: 'teacher', displayName: 'خالد', departmentId: 'male', teacherId: 'tnew', active: true, mustChangePassword: false }));
+    await assertFails(f.doc('users/u_y').set({ role: 'teacher', displayName: 'خالد', departmentId: 'female', teacherId: 'tnew', active: true, mustChangePassword: true }));
+    await assertFails(f.doc('users/u_z').set({ role: 'admin', displayName: 'خالد', active: true, mustChangePassword: false }));
+    // Teachers cannot create logins.
+    await assertFails(db(T_MALE).doc('users/u_w').set({ role: 'teacher', displayName: 'خالد', departmentId: 'male', teacherId: 'tm1', active: true, mustChangePassword: true }));
+  });
+
+  test('admin deactivates and retires logins; teacher with students keeps department', async () => {
+    const f = db(ADMIN);
+    await assertSucceeds(f.doc(`users/${T_MALE2.uid}`).update({ active: false, replacedAt: FieldValue.serverTimestamp() }));
+    await assertFails(f.doc(`users/${T_MALE2.uid}`).update({ role: 'admin' }));
+    await assertFails(f.doc('teachers/tm1').update({ departmentId: 'female' }));
+    await assertFails(f.doc('teachers/tm1').delete());
+  });
+
+  test('first-run admin setup works once only', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => ctx.firestore().doc('app_settings/bootstrap').delete());
+    const setup = (who) => {
+      const f = db(who);
+      const b = f.batch();
+      b.set(f.doc(`users/${who.uid}`), { role: 'admin', displayName: 'المشرف العام', departmentId: null, active: true, mustChangePassword: false, email: 'a@b.c', createdAt: FieldValue.serverTimestamp() });
+      b.set(f.doc('app_settings/bootstrap'), { adminUid: who.uid, createdAt: FieldValue.serverTimestamp() });
+      return b.commit();
+    };
+    await assertSucceeds(db(null).doc('app_settings/bootstrap').get());
+    await assertSucceeds(setup({ uid: 'boss' }));
+    await assertFails(setup({ uid: 'intruder' }));
+    // Cannot self-promote without the bootstrap document either.
+    await assertFails(db({ uid: 'intruder' }).doc('users/intruder').set({ role: 'admin', displayName: 'xx', active: true, mustChangePassword: false }));
   });
 
   test('evaluation settings: admin only, validated', async () => {
@@ -241,9 +306,13 @@ describe('administration', () => {
     await assertFails(db(ADMIN).doc('evaluation_settings/default').set({ ...valid, points: { excellent: 40 } }));
   });
 
-  test('login directory is read-only for clients', async () => {
-    await assertFails(db(null).doc('login_directory/x').set({ displayName: 'x' }));
-    await assertFails(db(ADMIN).doc('login_directory/x').set({ displayName: 'x' }));
+  test('login directory: public read, admin-only validated writes', async () => {
+    const entry = { displayName: 'خالد', departmentId: 'male', authEmail: 't.1@teachers.alwaqar.app', active: true };
+    await assertSucceeds(db(null).doc('login_directory/tm1').get());
+    await assertFails(db(null).doc('login_directory/x').set(entry));
+    await assertFails(db(T_MALE).doc('login_directory/x').set(entry));
+    await assertSucceeds(db(ADMIN).doc('login_directory/x').set(entry));
+    await assertFails(db(ADMIN).doc('login_directory/y').set({ ...entry, departmentId: 'other' }));
   });
 });
 
@@ -260,6 +329,15 @@ describe('notifications', () => {
   test('only admins publish announcements', async () => {
     const n = { title: 'إعلان', body: 'نص', audience: 'all', type: 'announcement', createdBy: 'admin1', createdAt: FieldValue.serverTimestamp() };
     await assertSucceeds(db(ADMIN).collection('notifications').add(n));
-    await assertFails(db(T_MALE).collection('notifications').add({ ...n, createdBy: 'tm1' }));
+    await assertFails(db(T_MALE).collection('notifications').add({ ...n, createdBy: T_MALE.uid }));
+  });
+
+  test('teachers write only their own milestone notifications', async () => {
+    const m = { title: 'إنجاز', body: 'بلغ الطالب ٥٠٠ نقطة', audience: 'user', type: 'milestone', userId: 'tm1', studentId: 'sm1', createdBy: T_MALE.uid, createdAt: FieldValue.serverTimestamp() };
+    await assertSucceeds(db(T_MALE).collection('notifications').add(m));
+    await assertFails(db(T_MALE).collection('notifications').add({ ...m, userId: 'tm2' }));
+    await assertFails(db(T_MALE).collection('notifications').add({ ...m, audience: 'all' }));
+    await assertSucceeds(db(T_MALE).collection('notifications').where('userId', '==', 'tm1').get());
+    await assertFails(db(T_MALE).collection('notifications').where('userId', '==', 'tm2').get());
   });
 });

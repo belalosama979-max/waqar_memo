@@ -1,18 +1,19 @@
-# إعداد Firebase — Firebase setup
+# إعداد Firebase — Firebase setup (free Spark plan)
 
-The app uses **Firebase only** (Auth, Firestore, Storage, Cloud Messaging, Cloud Functions, App Check).
-No credentials are committed: the Flutter app reads its Firebase options from
+The app runs entirely on Firebase's **free Spark plan** (no billing account):
+**Authentication + Cloud Firestore + App Check**. There are no Cloud Functions.
+Everything that needs elevated rights is done by the admin from inside the app and
+enforced by `firestore.rules`.
+
+No credentials are committed: the app reads its Firebase options at build time from
 `--dart-define-from-file=env/firebase.json` (git-ignored).
 
 ## 1. Create the project
 
-1. Create a project in the [Firebase console](https://console.firebase.google.com).
-2. Upgrade to the **Blaze** plan — Cloud Functions require it (teacher accounts are
-   created server-side with the Admin SDK).
-3. Enable **Authentication → Email/Password**.
-4. Create **Cloud Firestore** (production mode). Recommended location: `eur3` / `europe-west1`
-   (the functions are deployed to `europe-west1`).
-5. Enable **Cloud Storage** and **Cloud Messaging**.
+1. Create a project in the [Firebase console](https://console.firebase.google.com)
+   (or `firebase projects:create`). Stay on the **Spark** plan.
+2. **Authentication → Get started → Email/Password → Enable** (first option only).
+3. **Firestore Database → Create database** (production mode). Suggested location `eur3`.
 
 ## 2. Register the apps
 
@@ -21,102 +22,83 @@ No credentials are committed: the Flutter app reads its Firebase options from
 | Android | package `com.alwaqar.app` |
 | iOS | bundle `com.alwaqar.app` |
 
-Copy the values into `env/firebase.json` (start from `env/firebase.example.json`):
+Copy the values into `env/firebase.json` (template: `env/firebase.example.json`):
 `apiKey`, `messagingSenderId`, `projectId`, `storageBucket`, Android `appId`, iOS `appId`.
-You do **not** need `google-services.json` / `GoogleService-Info.plist`.
+`google-services.json` / `GoogleService-Info.plist` are **not** needed.
 
-## 3. App Check
-
-* Android: register the app with **Play Integrity** (add the SHA-256 of your upload
-  key and of the Play App Signing key).
-* iOS: register with **App Attest** (falls back to DeviceCheck).
-* Debug builds use the debug provider — add the debug token printed in the device log
-  under *App Check → Manage debug tokens*.
-* Once traffic looks good, click **Enforce** for Firestore, Storage and Functions.
-  The callable functions already set `enforceAppCheck: true` in production.
-
-## 4. Push notifications (iOS)
-
-Upload an **APNs Authentication Key** (.p8) in *Project settings → Cloud Messaging*,
-and enable the *Push Notifications* + *Background Modes → Remote notifications*
-capabilities in Xcode (the entitlements file is already in `ios/Runner`).
-Set `aps-environment` to `production` for App Store builds.
-
-## 5. Deploy rules, indexes and functions
+With the CLI:
 
 ```bash
-npm install -g firebase-tools
-firebase login
-firebase use --add            # select your project, alias "default"
+firebase apps:create ANDROID "Alwaqar Android" --package-name com.alwaqar.app --project <id>
+firebase apps:create IOS "Alwaqar iOS" --bundle-id com.alwaqar.app --project <id>
+firebase apps:sdkconfig ANDROID <android-app-id> --project <id>
+```
+
+## 3. Deploy rules and indexes
+
+```bash
 cd functions && npm install && cd ..
-firebase deploy --only firestore,storage,functions
+npx --prefix functions firebase deploy --only firestore --project <id>
 ```
 
-## 6. Create the first admin
+(On Windows with the Arabic folder name, run this from the `W:` drive mapping — see DEVELOPMENT.md.)
 
-```bash
-cd functions
-gcloud auth application-default login
-ALWAQAR_ADMIN_PASSWORD='a-strong-password' node scripts/create-admin.js <projectId> admin@your-domain.com "المشرف العام"
-```
-
-This sets the `role: admin` custom claim, creates `users/{uid}` and seeds
-`departments` and `evaluation_settings/default`.
-
-## 7. Build the app against the project
+## 4. Build and create the first admin
 
 ```bash
 flutter build apk --release --dart-define-from-file=env/firebase.json
-flutter build appbundle --release --dart-define-from-file=env/firebase.json
-flutter build ipa --release --dart-define-from-file=env/firebase.json   # on macOS
 ```
 
-A build without configuration shows an Arabic "التطبيق غير مهيأ بعد" screen instead of crashing.
+Open the app → **تسجيل الدخول → الإدارة → «إعداد حساب الإدارة لأول مرة»**. This one-time
+screen creates the first admin (you choose the e-mail and password). The rules allow it
+only while `app_settings/bootstrap` does not exist, so **do it right after deploying**.
+After that, the admin adds teachers and students from the app.
+
+## 5. App Check (recommended)
+
+Register the Android app with **Play Integrity** (add the SHA-256 of your signing key)
+and iOS with **App Attest**, check the metrics, then **Enforce** for Firestore and
+Authentication. Debug builds use the debug provider (add the token from the device log).
 
 ---
 
-## Firestore data model
+## Data model
 
 | Collection | Purpose | Who can read |
 |---|---|---|
-| `users/{uid}` | Private profile: role, department, `mustChangePassword`, FCM ids | self, admin |
-| `teachers/{uid}` | Teacher profile, `studentCount` | admin, teachers of the same department |
-| `login_directory/{uid}` | Name + department + synthetic auth e-mail (login screen) | public |
-| `students/{id}` | Student, assigned teacher (denormalized name), aggregates | admin, same-department teachers |
+| `users/{authUid}` | Login profile: `role`, `active`, `mustChangePassword`, `teacherId`, `departmentId` | self, admin |
+| `teachers/{teacherId}` | Teacher identity (`authUid` = current login), `studentCount` | admin, same-department teachers |
+| `login_directory/{teacherId}` | Name + department + login e-mail (for the login screen) | public |
+| `students/{id}` | Student, `teacherId`, denormalized teacher name, aggregates | admin, same-department teachers |
 | `recitations/{id}` | Append-only history with teacher/department snapshot | admin, same-department teachers |
 | `evaluation_settings/default` | Points per evaluation, max extra points | signed-in |
 | `app_settings/general` | Academy name, milestone step | signed-in |
-| `notifications/{id}` | Announcements (`audience`) and personal milestones (`userId`) | admin, matching teachers |
-| `departments/{male,female}` | Department labels | signed-in |
+| `app_settings/bootstrap` | Marks the one-time admin setup as done | public |
+| `notifications/{id}` | Announcements (`audience`) and personal milestones (`userId` = teacherId) | admin, matching teachers |
 
-**Custom claims** (set only by Cloud Functions): `role`, `dept`, `mcp` (must change password).
+A teacher's **identity** (`teachers/{teacherId}`) is separate from their **login**
+(`users/{authUid}`). Students and recitations reference the teacher id, so the admin can
+issue a new login without touching any history.
 
-### Security highlights (`firestore.rules`)
+## How account management works without a server
 
-* Every teacher query must be provably restricted to the caller's department — the
-  rules reject any query that could return another department's data.
-* A teacher can only create a recitation **in the same batch** that adds exactly its
-  points to their own student (`getAfter`), with the evaluation points matching the
-  admin's current settings, extra points within the limit, and a valid juz/surah.
-* Recitations are append-only for teachers; only admins delete (and the app reverses
-  the points).
-* A teacher holding a temporary password (`mcp` claim) can read only their own profile
-  until `confirmPasswordChanged` verifies the change server-side.
-* Passwords are never stored in Firestore.
+| Operation | How |
+|---|---|
+| Create teacher | Admin app creates the Auth login through a *secondary* FirebaseApp (the admin stays signed in), then writes `teachers`, `login_directory`, `users` in one batch. Temporary password: first name + `123`. |
+| First-login password | Teacher changes it in the app; the rules let a user only clear their own `mustChangePassword` (true → false). Until then the rules deny all academic data. |
+| Reset access | Admin issues a **new** login (new temporary password) for the same teacher and retires the old login (`active: false`). |
+| Deactivate | `active: false` on the teacher's logins; the rules deny everything and the app signs out. |
+| Delete teacher | Only with no students assigned; identity and directory entry removed, logins retired. |
+| Roles | Read from `users/{authUid}` by the rules (no custom claims). |
 
-**Known trade-off:** the login screen needs teacher names before sign-in, so
-`login_directory` (names + department only) is publicly readable. Protect it further by
-enforcing App Check on Firestore.
+## Free-plan trade-offs
 
-### Cloud Functions (`functions/index.js`)
-
-| Function | Type | Purpose |
-|---|---|---|
-| `createTeacher` | callable (admin) | Auth user + claims + profile docs, returns temporary password |
-| `updateTeacher` | callable (admin) | Rename / change department (blocked if students assigned) |
-| `setTeacherActive` | callable (admin) | Disable/enable account, revoke sessions |
-| `resetTeacherPassword` | callable (admin) | Back to "first name + 123", forces change |
-| `deleteTeacher` | callable (admin) | Only when no students are assigned |
-| `confirmPasswordChanged` | callable (user) | Clears `mcp` after verifying the password changed |
-| `onNotificationCreated` | Firestore trigger | Sends announcements to FCM topics |
-| `onRecitationCreated` | Firestore trigger | Milestone notification to the teacher |
+* **Push notifications while the app is closed** need a server (FCM sending), so they are
+  not available. Notifications are stored in Firestore and shown in the app; while the
+  app is open, new ones also raise a phone alert.
+* Retired/deactivated logins still exist in Firebase Auth (an admin client cannot
+  delete other users) but are powerless: the rules check `active`.
+* The admin's own password can be reset by e-mail from the login screen.
+* `login_directory` (names + department) is publicly readable because the login screen
+  needs it before sign-in. Enforce App Check to limit access to the genuine app.
+* Spark limits (50k reads / 20k writes per day) comfortably cover a typical academy.

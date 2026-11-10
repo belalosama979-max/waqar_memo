@@ -67,7 +67,6 @@ flutter analyze
 flutter test                                   # unit + widget tests
 cd functions
 npm run test:rules                             # Firestore security rules (emulator)
-npm run test:functions                         # Cloud Functions (auth+firestore+functions emulators)
 # End-to-end on an Android emulator, with seeded emulators running:
 flutter test integration_test/app_test.dart --dart-define-from-file=env/emulator.json -d emulator-5554
 ```

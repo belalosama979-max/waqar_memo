@@ -106,6 +106,7 @@ class _RecordRecitationScreenState extends ConsumerState<RecordRecitationScreen>
             ),
             teacher: user,
             settings: settings,
+            milestoneStep: ref.read(appSettingsProvider).value?.milestoneStep ?? 500,
           );
       _done = true;
       if (!mounted) return;

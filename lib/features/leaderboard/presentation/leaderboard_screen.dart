@@ -59,7 +59,7 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
     }
 
     final dep = user.departmentId!;
-    final mine = ref.watch(_teacherLeaderboardProvider((teacherId: user.id, dep: dep)));
+    final mine = ref.watch(_teacherLeaderboardProvider((teacherId: user.teacherKey, dep: dep)));
     final department = ref.watch(departmentLeaderboardProvider(dep));
     return DefaultTabController(
       length: 2,
@@ -83,7 +83,7 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> {
         body: TabBarView(
           children: [
             _Board(value: mine, showTeacher: false),
-            _Board(value: department, showTeacher: true, highlightTeacherId: user.id),
+            _Board(value: department, showTeacher: true, highlightTeacherId: user.teacherKey),
           ],
         ),
       ),

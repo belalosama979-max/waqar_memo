@@ -66,7 +66,7 @@ class NotificationsRepository {
     final queries = [
       _col.where('audience', isEqualTo: 'all'),
       _col.where('audience', isEqualTo: 'dept_${user.departmentId!.id}'),
-      _col.where('userId', isEqualTo: user.id),
+      _col.where('userId', isEqualTo: user.teacherKey),
     ].map((q) => q.orderBy('createdAt', descending: true).limit(limit).snapshots().map(_map)).toList();
 
     final controller = StreamController<List<AppNotification>>();

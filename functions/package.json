@@ -1,26 +1,20 @@
 {
-  "name": "alwaqar-functions",
+  "name": "alwaqar-backend-tools",
   "private": true,
-  "description": "Cloud Functions for the Alwaqar Quran recitation app",
-  "main": "index.js",
+  "description": "Local tooling for the Alwaqar Firebase backend (free Spark plan, no Cloud Functions): emulators, demo seed data, security-rules tests.",
   "engines": {
-    "node": "22"
+    "node": ">=20"
   },
   "scripts": {
     "emulators": "firebase emulators:start --project demo-alwaqar",
     "seed": "node scripts/seed-emulator.js",
     "test:rules": "firebase emulators:exec --only firestore --project demo-alwaqar \"node --test test/rules.test.js\"",
-    "test:functions": "firebase emulators:exec --only auth,firestore,functions --project demo-alwaqar \"node --test test/functions.test.js\"",
-    "create-admin": "node scripts/create-admin.js",
-    "deploy": "firebase deploy --only functions,firestore,storage"
-  },
-  "dependencies": {
-    "firebase-admin": "^13.0.0",
-    "firebase-functions": "^6.0.0"
+    "deploy": "firebase deploy --only firestore"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.0",
     "firebase": "^11.0.0",
+    "firebase-admin": "^13.0.0",
     "firebase-tools": "^14.0.0"
   }
 }

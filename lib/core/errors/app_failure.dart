@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
@@ -20,12 +19,6 @@ class AppFailure implements Exception {
     if (error is AppFailure) return error;
     if (kDebugMode) debugPrint('[AppFailure] ${error.runtimeType}: $error');
     if (error is FirebaseAuthException) return AppFailure(_auth(error.code), code: error.code);
-    if (error is FirebaseFunctionsException) {
-      // Functions throw HttpsError with an Arabic message we control.
-      final msg = error.message;
-      if (msg != null && _containsArabic(msg)) return AppFailure(msg, code: error.code);
-      return AppFailure(_generic(error.code), code: error.code);
-    }
     if (error is FirebaseException) return AppFailure(_generic(error.code), code: error.code);
     if (error is SocketException) return const AppFailure('لا يوجد اتصال بالإنترنت', code: 'network');
     if (error is TimeoutException) return const AppFailure('انتهت مهلة الاتصال، حاول مرة أخرى', code: 'timeout');
@@ -33,7 +26,6 @@ class AppFailure implements Exception {
     return const AppFailure('حدث خطأ غير متوقع، حاول مرة أخرى', code: 'unknown');
   }
 
-  static bool _containsArabic(String s) => RegExp('[؀-ۿ]').hasMatch(s);
 
   static String _auth(String code) => switch (code) {
         'invalid-credential' ||

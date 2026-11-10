@@ -18,7 +18,6 @@ if (!process.env.GCLOUD_PROJECT.startsWith('demo-')) {
 const { initializeApp } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
-const teachers = require('../src/teachers');
 
 initializeApp({ projectId: process.env.GCLOUD_PROJECT });
 
@@ -38,6 +37,30 @@ const STUDENTS = {
   'مريم حسن': ['آمنة خالد', 'رقية سعد', 'هاجر علي'],
 };
 
+function initialPassword(fullName) {
+  const first = fullName.trim().split(/\s+/)[0];
+  return `${first}123`.length >= 6 ? `${first}123` : `${first}1234`;
+}
+
+/** Mirrors TeacherRepository.createTeacher in the app (free-plan data model). */
+async function createTeacher({ fullName, departmentId }) {
+  const auth = getAuth();
+  const db = getFirestore();
+  const password = initialPassword(fullName);
+  const authEmail = `t.${Math.random().toString(16).slice(2, 14)}@teachers.alwaqar.app`;
+  const login = await auth.createUser({ email: authEmail, password, displayName: fullName });
+  const teacherRef = db.collection('teachers').doc();
+  const batch = db.batch();
+  batch.set(teacherRef, { displayName: fullName, departmentId, active: true, studentCount: 0, phone: null, authUid: login.uid, createdAt: FieldValue.serverTimestamp() });
+  batch.set(db.collection('login_directory').doc(teacherRef.id), { displayName: fullName, departmentId, authEmail, active: true });
+  batch.set(db.collection('users').doc(login.uid), {
+    role: 'teacher', displayName: fullName, departmentId, teacherId: teacherRef.id, active: true,
+    mustChangePassword: true, email: authEmail, createdAt: FieldValue.serverTimestamp(),
+  });
+  await batch.commit();
+  return { id: teacherRef.id, temporaryPassword: password };
+}
+
 const POINTS = { excellentPlus: 60, excellent: 40, veryGood: 25, notRecited: 0, repeat: 10 };
 const SURAHS = { 67: 'الملك', 78: 'النبأ', 36: 'يس', 18: 'الكهف', 55: 'الرحمن', 56: 'الواقعة' };
 const JUZ = { 30: 'الثلاثون', 29: 'التاسع والعشرون', 28: 'الثامن والعشرون' };
@@ -53,7 +76,6 @@ async function main() {
   } catch {
     admin = await auth.createUser({ email: ADMIN.email, password: ADMIN.password, displayName: ADMIN.name, emailVerified: true });
   }
-  await auth.setCustomUserClaims(admin.uid, { role: 'admin' });
   await db.collection('users').doc(admin.uid).set({
     role: 'admin', displayName: ADMIN.name, departmentId: null, active: true, mustChangePassword: false,
     email: ADMIN.email, createdAt: FieldValue.serverTimestamp(),
@@ -62,12 +84,13 @@ async function main() {
   await db.collection('departments').doc('male').set({ name: 'قسم الذكور' });
   await db.collection('departments').doc('female').set({ name: 'قسم الإناث' });
   await db.collection('evaluation_settings').doc('default').set({ points: POINTS, maxExtraPoints: 100, updatedAt: FieldValue.serverTimestamp() });
+  await db.collection('app_settings').doc('bootstrap').set({ adminUid: admin.uid, createdAt: FieldValue.serverTimestamp() });
   await db.collection('app_settings').doc('general').set({ academyName: 'حلقات الوقار التجريبية', milestoneStep: 500, updatedAt: FieldValue.serverTimestamp() });
 
   const credentials = [];
   const evals = Object.keys(POINTS);
   for (const t of TEACHERS) {
-    const created = await teachers.createTeacher(t);
+    const created = await createTeacher(t);
     credentials.push({ name: t.fullName, department: t.departmentId, password: created.temporaryPassword });
     let count = 0;
     for (const studentName of STUDENTS[t.fullName]) {

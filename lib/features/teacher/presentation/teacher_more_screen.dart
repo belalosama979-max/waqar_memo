@@ -8,7 +8,6 @@ import '../../../core/widgets/common.dart';
 import '../../../router/routes.dart';
 import '../../auth/application/session_providers.dart';
 import '../../auth/data/auth_repository.dart';
-import '../../notifications/data/push_service.dart';
 
 /// Account menu shared by teachers (and reused by admins in settings).
 class AccountSection extends ConsumerWidget {
@@ -16,7 +15,6 @@ class AccountSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.watch(currentUserProvider).value;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -44,7 +42,6 @@ class AccountSection extends ConsumerWidget {
                 onTap: () async {
                   final ok = await confirmDialog(context, title: 'تسجيل الخروج', message: 'هل تريد تسجيل الخروج من حسابك؟', confirmLabel: 'خروج');
                   if (!ok) return;
-                  if (user != null) await ref.read(pushServiceProvider).unregister(user.id);
                   await ref.read(authRepositoryProvider).signOut();
                 },
               ),

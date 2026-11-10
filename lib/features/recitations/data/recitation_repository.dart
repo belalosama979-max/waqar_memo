@@ -8,6 +8,7 @@ import '../../../core/errors/app_failure.dart';
 import '../../../core/firebase/firebase_providers.dart';
 import '../../../core/firebase/json_converters.dart';
 import '../../../core/constants/quran_data.dart';
+import '../../../core/utils/formatters.dart';
 import '../../auth/domain/app_user.dart';
 import '../../auth/domain/enums.dart';
 import '../../students/domain/student.dart';
@@ -61,7 +62,7 @@ class RecitationRepository {
   /// Validates a draft against business rules. Returns an Arabic message or null.
   static String? validate(RecitationDraft d, {required AppUser teacher, required EvaluationSettings settings, DateTime? now}) {
     final today = now ?? DateTime.now();
-    if (d.student.teacherId != teacher.id) return 'هذا الطالب غير مسجل لديك';
+    if (d.student.teacherId != teacher.teacherKey) return 'هذا الطالب غير مسجل لديك';
     if (d.student.departmentId != teacher.departmentId) return 'لا يمكن التسجيل لطالب من قسم آخر';
     if (d.type == RecitationType.juz) {
       final p = d.partNumber;
@@ -87,6 +88,7 @@ class RecitationRepository {
     RecitationDraft d, {
     required AppUser teacher,
     required EvaluationSettings settings,
+    int milestoneStep = 500,
   }) async {
     final error = validate(d, teacher: teacher, settings: settings);
     if (error != null) throw AppFailure(error, code: 'invalid-argument');
@@ -99,7 +101,7 @@ class RecitationRepository {
     batch.set(_col.doc(d.id), {
       'studentId': d.student.id,
       'studentName': d.student.fullName,
-      'teacherId': teacher.id,
+      'teacherId': teacher.teacherKey,
       'teacherName': teacher.displayName,
       'departmentId': teacher.departmentId!.id,
       'recitationDate': Timestamp.fromDate(recitationDate),
@@ -125,6 +127,24 @@ class RecitationRepository {
         'lastEvaluation': d.evaluation.name,
       },
     });
+
+    // Milestone: notify the teacher (in-app) when the student crosses N points.
+    final step = milestoneStep < 50 ? 500 : milestoneStep;
+    final before = d.student.totalPoints;
+    final after = before + pts.total;
+    if (after ~/ step > before ~/ step) {
+      final milestone = (after ~/ step) * step;
+      batch.set(_db.collection(Col.notifications).doc(), {
+        'title': 'إنجاز جديد 🎉',
+        'body': 'بلغ ${d.student.fullName} ${Fmt.number(milestone)} نقطة. بارك الله في جهده!',
+        'audience': 'user',
+        'type': 'milestone',
+        'userId': teacher.teacherKey,
+        'studentId': d.student.id,
+        'createdBy': teacher.id,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
 
     final title = '${d.student.fullName} — ${d.portionLabel}';
     await _pending.markPending(d.id, title);

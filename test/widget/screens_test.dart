@@ -12,7 +12,6 @@ import 'package:alwaqar/features/settings/data/settings_repository.dart';
 import 'package:alwaqar/features/students/application/student_providers.dart';
 import 'package:alwaqar/features/students/domain/student.dart';
 import 'package:alwaqar/features/teacher/presentation/teacher_home_screen.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:firebase_auth_mocks/firebase_auth_mocks.dart';
 import 'package:flutter/material.dart';
@@ -21,12 +20,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers.dart';
-
-class MockFunctions extends Mock implements FirebaseFunctions {}
 
 /// Pumps [routes] inside an Arabic RTL app with the given overrides.
 Future<void> pumpApp(
@@ -45,7 +41,6 @@ Future<void> pumpApp(
   await tester.pumpWidget(ProviderScope(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(prefs),
-      functionsProvider.overrideWithValue(MockFunctions()),
       ...overrides.cast(),
     ],
     child: MaterialApp.router(

@@ -18,7 +18,7 @@ final _teacherRecentProvider = StreamProvider<List<Recitation>>((ref) {
   final now = DateTime.now();
   return ref.watch(recitationRepositoryProvider).watchRecent(
         department: user.departmentId,
-        teacherId: user.id,
+        teacherId: user.teacherKey,
         since: DateTime(now.year, now.month - 5),
       );
 });
@@ -44,7 +44,7 @@ class TeacherStatsScreen extends ConsumerWidget {
           final weekPoints = thisWeek.fold(0, (a, r) => a + r.totalPoints);
           final top = Analytics.topStudents(students, count: 5);
           final teachers = dept == null ? const <TeacherScore>[] : Analytics.topTeachers(dept, count: 100);
-          final myRank = teachers.indexWhere((t) => t.teacherId == user?.id);
+          final myRank = teachers.indexWhere((t) => t.teacherId == user?.teacherKey);
           final cols = Breakpoints.isTablet(context) ? 4 : 2;
           return ListView(
             padding: const EdgeInsets.all(16),

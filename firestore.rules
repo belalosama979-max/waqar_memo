@@ -1,28 +1,43 @@
 rules_version = '2';
 
-// Security model for "الوقار".
-// Roles and department live in Firebase Auth custom claims, set ONLY by Cloud
-// Functions (Admin SDK):  { role: 'admin' | 'teacher', dept: 'male' | 'female', mcp: bool }
-//   mcp = "must change password" — a teacher with a temporary password can sign in
-//         and read their own profile, but cannot touch any academic data.
+// Security model for "الوقار" (Firebase free Spark plan — no Cloud Functions).
+//
+// Every signed-in account has a profile at users/{authUid}:
+//   { role: 'admin' | 'teacher', active, mustChangePassword,
+//     teacherId (teachers only), departmentId ('male' | 'female', teachers only) }
+// Roles are therefore read from that document. Only an admin can create or
+// change another account's profile, and the very first admin is created once
+// through the bootstrap document app_settings/bootstrap.
+//
+// A teacher's identity (teachers/{teacherId}) is separate from the login account,
+// so an admin "password reset" issues a new login linked to the same teacher.
+//
 // Department isolation is enforced here, never by client-side filtering.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     // ---------- helpers ----------
     function signedIn() { return request.auth != null; }
-    function isAdmin() { return signedIn() && request.auth.token.role == 'admin'; }
+    function docPath(col, id) { return /databases/$(database)/documents/$(col)/$(id); }
+    function me() { return get(docPath('users', request.auth.uid)).data; }
+    function hasProfile() { return signedIn() && exists(docPath('users', request.auth.uid)); }
+    function isAdmin() { return hasProfile() && me().role == 'admin' && me().active == true; }
+    // A teacher still holding a temporary password can read only their own
+    // profile until they set a new password.
     function isTeacher() {
-      return signedIn()
-        && request.auth.token.role == 'teacher'
-        && request.auth.token.dept in ['male', 'female']
-        && request.auth.token.get('mcp', false) == false;
+      return hasProfile()
+        && me().role == 'teacher'
+        && me().active == true
+        && me().mustChangePassword == false
+        && me().departmentId in ['male', 'female']
+        && me().teacherId is string;
     }
-    function dept() { return request.auth.token.dept; }
+    function dept() { return me().departmentId; }
+    function myTeacherId() { return me().teacherId; }
+
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
-    function docPath(col, id) { return /databases/$(database)/documents/$(col)/$(id); }
     function validDept(d) { return d in ['male', 'female']; }
     function validName(n) { return n is string && n.size() >= 2 && n.size() <= 60; }
     function optionalString(m, k, max) { return !(k in m) || m[k] == null || (m[k] is string && m[k].size() <= max); }
@@ -32,24 +47,80 @@ service cloud.firestore {
       return { 'excellentPlus': 60, 'excellent': 40, 'veryGood': 25, 'notRecited': 0, 'repeat': 10 };
     }
 
+    function bootstrapPath() { return docPath('app_settings', 'bootstrap'); }
+
     // ---------- users (private profile) ----------
+    function userKeys() {
+      return ['role', 'displayName', 'departmentId', 'teacherId', 'active', 'mustChangePassword',
+              'email', 'createdAt', 'passwordChangedAt', 'fcmTokens', 'replacedAt'];
+    }
+
+    // First-run setup: the first signed-in user may make themselves admin,
+    // atomically with creating app_settings/bootstrap. Afterwards this is closed.
+    function bootstrapsAdmin(uid) {
+      return request.auth.uid == uid
+        && !exists(bootstrapPath())
+        && getAfter(bootstrapPath()).data.adminUid == uid
+        && incoming().keys().hasOnly(userKeys())
+        && incoming().role == 'admin'
+        && incoming().active == true
+        && incoming().mustChangePassword == false
+        && validName(incoming().displayName);
+    }
+
+    // An admin creates the login profile of a teacher (temporary password).
+    function adminCreatesTeacherLogin() {
+      let u = incoming();
+      let t = getAfter(docPath('teachers', u.teacherId));
+      return isAdmin()
+        && u.keys().hasOnly(userKeys())
+        && u.role == 'teacher'
+        && u.teacherId is string
+        && t != null
+        && t.data.departmentId == u.departmentId
+        && validName(u.displayName)
+        && u.active == true
+        && u.mustChangePassword == true;
+    }
+
     match /users/{uid} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
-      // A user may only manage their own push registration ids, and signal a
-      // password change (verified server-side by onPasswordChangeRequested).
-      allow update: if signedIn() && request.auth.uid == uid
-        && changedKeys().hasOnly(['fcmTokens', 'passwordChangeRequestedAt'])
-        && (!('fcmTokens' in changedKeys())
-            || (incoming().fcmTokens is list && incoming().fcmTokens.size() <= 10))
-        && (!('passwordChangeRequestedAt' in changedKeys())
-            || incoming().passwordChangeRequestedAt == request.time);
-      allow create, delete: if false; // Cloud Functions only
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow create: if bootstrapsAdmin(uid) || adminCreatesTeacherLogin();
+      // Self: finish the first-login password change, manage device ids.
+      // Admin: activate/deactivate, rename, move department, retire a login.
+      allow update: if (signedIn() && request.auth.uid == uid
+                        && changedKeys().hasOnly(['mustChangePassword', 'passwordChangedAt', 'fcmTokens'])
+                        && (!('mustChangePassword' in changedKeys()) || incoming().mustChangePassword == false)
+                        && (!('passwordChangedAt' in changedKeys()) || incoming().passwordChangedAt == request.time)
+                        && (!('fcmTokens' in changedKeys())
+                            || (incoming().fcmTokens is list && incoming().fcmTokens.size() <= 10)))
+                    || (isAdmin() && request.auth.uid != uid
+                        && changedKeys().hasOnly(['active', 'displayName', 'departmentId', 'replacedAt'])
+                        && validName(incoming().displayName)
+                        && (incoming().departmentId == null || validDept(incoming().departmentId)));
+      allow delete: if false;
+    }
+
+    match /app_settings/bootstrap {
+      allow read: if true;
+      allow create: if signedIn()
+        && incoming().keys().hasOnly(['adminUid', 'createdAt'])
+        && incoming().adminUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && getAfter(docPath('users', request.auth.uid)).data.role == 'admin';
+      allow update, delete: if false;
     }
 
     // ---------- public login directory (names only) ----------
     match /login_directory/{id} {
       allow read: if true;
-      allow write: if false; // Cloud Functions only
+      allow write: if isAdmin()
+        && (request.method == 'delete'
+            || (incoming().keys().hasOnly(['displayName', 'departmentId', 'authEmail', 'active'])
+                && validName(incoming().displayName)
+                && validDept(incoming().departmentId)
+                && incoming().authEmail is string
+                && incoming().active is bool));
     }
 
     match /departments/{id} {
@@ -58,13 +129,26 @@ service cloud.firestore {
     }
 
     // ---------- teachers ----------
+    function teacherKeys() { return ['displayName', 'departmentId', 'active', 'studentCount', 'phone', 'authUid', 'createdAt', 'updatedAt']; }
+
     match /teachers/{tid} {
       allow read: if isAdmin() || (isTeacher() && resource.data.departmentId == dept());
-      // Admin client only maintains the student counter; everything else via Functions.
+      allow create: if isAdmin()
+        && incoming().keys().hasOnly(teacherKeys())
+        && validName(incoming().displayName)
+        && validDept(incoming().departmentId)
+        && incoming().active == true
+        && incoming().studentCount == 0
+        && optionalString(incoming(), 'phone', 30);
       allow update: if isAdmin()
-        && changedKeys().hasOnly(['studentCount'])
-        && incoming().studentCount is int && incoming().studentCount >= 0;
-      allow create, delete: if false;
+        && incoming().keys().hasOnly(teacherKeys())
+        && validName(incoming().displayName)
+        && validDept(incoming().departmentId)
+        && incoming().studentCount is int && incoming().studentCount >= 0
+        && optionalString(incoming(), 'phone', 30)
+        // A teacher with students cannot switch department (transfer them first).
+        && (!('departmentId' in changedKeys()) || existing().studentCount == 0);
+      allow delete: if isAdmin() && existing().studentCount == 0;
     }
 
     // ---------- students ----------
@@ -108,7 +192,7 @@ service cloud.firestore {
     function teacherAppliesRecitation(sid) {
       let rid = incoming().lastAppliedRecitationId;
       let after = getAfter(docPath('recitations', rid));
-      return existing().teacherId == request.auth.uid
+      return existing().teacherId == myTeacherId()
         && existing().departmentId == dept()
         && changedKeys().hasOnly(['totalPoints', 'recitationCount', 'lastAppliedRecitationId', 'updatedAt',
                                   'lastRecitationId', 'lastRecitationLabel', 'lastRecitationDate', 'lastEvaluation'])
@@ -168,11 +252,11 @@ service cloud.firestore {
         && r.keys().hasAll(['studentId', 'studentName', 'teacherId', 'teacherName', 'departmentId',
                             'recitationDate', 'recitationType', 'evaluation', 'evaluationPoints',
                             'extraPoints', 'totalPoints', 'createdBy', 'createdAt'])
-        && r.teacherId == request.auth.uid
+        && r.teacherId == myTeacherId()
         && r.createdBy == request.auth.uid
         && r.departmentId == dept()
         && student != null
-        && student.data.teacherId == request.auth.uid
+        && student.data.teacherId == myTeacherId()
         && student.data.departmentId == dept()
         && student.data.lastAppliedRecitationId == rid
         && r.studentName is string && r.studentName.size() <= 60
@@ -214,7 +298,7 @@ service cloud.firestore {
       allow write: if isAdmin() && id == 'default' && validEvaluationSettings();
     }
 
-    match /app_settings/{id} {
+    match /app_settings/general {
       allow read: if signedIn();
       allow write: if isAdmin()
         && incoming().keys().hasOnly(['academyName', 'milestoneStep', 'updatedAt'])
@@ -227,15 +311,25 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (isTeacher() && (resource.data.audience == 'all'
                             || resource.data.audience == 'dept_' + dept()
-                            || resource.data.get('userId', '') == request.auth.uid));
-      allow create: if isAdmin()
-        && incoming().keys().hasOnly(['title', 'body', 'audience', 'type', 'createdBy', 'createdAt'])
-        && incoming().audience in ['all', 'dept_male', 'dept_female']
-        && incoming().type == 'announcement'
-        && incoming().title is string && incoming().title.size() > 0 && incoming().title.size() <= 80
-        && incoming().body is string && incoming().body.size() > 0 && incoming().body.size() <= 500
-        && incoming().createdBy == request.auth.uid
-        && incoming().createdAt == request.time;
+                            || resource.data.get('userId', '') == myTeacherId()));
+      // Admin announcements, or a teacher's own milestone (written with the recitation).
+      allow create: if (isAdmin()
+                        && incoming().keys().hasOnly(['title', 'body', 'audience', 'type', 'createdBy', 'createdAt'])
+                        && incoming().audience in ['all', 'dept_male', 'dept_female']
+                        && incoming().type == 'announcement'
+                        && incoming().title is string && incoming().title.size() > 0 && incoming().title.size() <= 80
+                        && incoming().body is string && incoming().body.size() > 0 && incoming().body.size() <= 500
+                        && incoming().createdBy == request.auth.uid
+                        && incoming().createdAt == request.time)
+                    || (isTeacher()
+                        && incoming().keys().hasOnly(['title', 'body', 'audience', 'type', 'userId', 'studentId', 'createdBy', 'createdAt'])
+                        && incoming().type == 'milestone'
+                        && incoming().audience == 'user'
+                        && incoming().userId == myTeacherId()
+                        && incoming().title is string && incoming().title.size() <= 80
+                        && incoming().body is string && incoming().body.size() <= 300
+                        && incoming().createdBy == request.auth.uid
+                        && incoming().createdAt == request.time);
       allow delete: if isAdmin();
       allow update: if false;
     }
